@@ -59,16 +59,12 @@ def connect_wifi_by_ssid(ssid, psw):
     profile.key = psw
     ifaces.remove_all_network_profiles()
     tmp_profile = ifaces.add_network_profile(profile)
-    connect_count = 10
+    connect_count = 2
     while connect_count:
-        if ifaces.status() == const.IFACE_DISCONNECTED:
-            logger.info(f'connect for target wifi {ssid}   :{connect_count}')
-            ifaces.connect(tmp_profile)
-            time.sleep(10)
-            connect_count -= 1
-        else:
-            connect_count = 0
-            logger.info(f'connect succsfully to wifi {ssid}!')
+        logger.info(f'connect for target wifi {ssid}   :{connect_count}')
+        ifaces.connect(tmp_profile)
+        time.sleep(4)
+        connect_count -= 1
 
     # 需要线程挂一下，3s够了，不然换wifi导致出错
     if ifaces.status() == const.IFACE_CONNECTED:
@@ -164,7 +160,7 @@ def download_file(wifi_list, paras):
                         max_media = media['n']
 
     elif paras.mode == 'photo':
-        for wifi in wifi_list:
+        for indexx,wifi in enumerate(wifi_list):
             connect_wifi_by_ssid(wifi.get('ssid'), wifi.get('psw'))
             media_list = get_media_list()
             # 找时间戳前几大的jpg格式的文件，然后下载
@@ -174,17 +170,22 @@ def download_file(wifi_list, paras):
                 if media['n'].lower().endswith('.jpg'):
                     media_find_list.append(media)
             download_url = Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WiFi.DOWNLOAD_FIlE
+            print('dadad'+download_url)
             countdown = int(paras.time)
             media_res_list = get_max_group_media(media_find_list, countdown)
-            for index, media in enumerate(media_res_list):
+            print(media_res_list)
+            for index in range(media_res_list.__len__()):
                 if countdown <= 0:
                     break
-                download_url += '/'+media['d'] + '/' + media['n']
-                with requests.get(download_url, stream=True) as request:
+                url = download_url + '/' + str(media_res_list[index]['n'])
+                print(download_url)
+                logger.info(f'Downloading {media_res_list[index]["n"]} from {download_url}')
+                with requests.get(url, stream=True) as request:
                     request.raise_for_status()
                     # 命名方式： 文件总目录+模式+文件名
-                    file = paras.file[index] + '/' + paras.mode + '/' + media['n'].spilt('.')[0] + '.jpg'
-                    with open(file, 'wb') as f:
+                    file = paras.file[indexx] + '/' + paras.mode + '/' + media_res_list[index]['n'].split('.')[0] + '.jpg'
+                    logger.info(f'file name is {file}')
+                    with open(file, "wb") as f:
                         logger.info(f'Receiving binary stream to {file}...')
                         for chunk in request.iter_content(chunk_size=8192):
                             f.write(chunk)
@@ -232,9 +233,9 @@ def get_media_list() -> Dict[str, Any]:
     logger.info(f'getting the media list: sending {url}')
     response = requests.get(url)
     response.raise_for_status()
-    logger.info('Command sent sucdessfully!')
+    logger.info('Get media Command sent sucdessfully!')
 
-    logger.info(f"Response: {json.dumps(response.json(), indent=4)}")
+    # logger.info(f"Response: {json.dumps(response.json(), indent=4)}")
 
     return response.json()
 
@@ -330,7 +331,7 @@ async def mainloop(loop, paras):
     for task in dones:
         print("Task ret:", task.result())
 
-    download_file(wifi_list=wifi_profile, paras=paras)
+    #download_file(wifi_list=wifi_profile, paras=paras)
 
 
 # download_file(wifi_profile)
@@ -338,16 +339,17 @@ async def mainloop(loop, paras):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GoPro Controller')
     parser.add_argument('-m', '--mode', help='模式选择，video和photo', default='photo')
-    parser.add_argument('-t', '--time', help='记录时间，如果是photo就代表拍的张数', default='1')
+    parser.add_argument('-t', '--time', help='记录时间，如果是photo就代表拍的张数', default='2')
     # 此命令行参数可以接收多个参数
-    parser.add_argument('-f', '--file', nargs='*', help='左相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/left',
+    parser.add_argument('-f', '--file', nargs='+', help='左相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/left',
                                                                             '/Users/pengkun/Desktop/GoProVideo/right'])
     args = parser.parse_args()
     try:
         tasks = []
         loop_outer = asyncio.get_event_loop()
         task = loop_outer.create_task(mainloop(loop=loop_outer, paras=args))
-        loop_outer.run_until_complete(asyncio.wait([task,]))
+        loop_outer.run_until_complete(asyncio.wait([task, ]))
+        download_file(wifi_list=wifi_profile, paras=args)
         loop_outer.close()
     except Exception as e:
         logger.error(repr(e))

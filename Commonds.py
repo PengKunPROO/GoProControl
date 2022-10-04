@@ -69,7 +69,7 @@ class Commands:
         ON = bytearray(b'\x03\x17\x01\x01')
         OFF = bytearray(b'\x03\x17\x01\x00')
         GET_MEDIA_LIST = '/gopro/media/list'
-        DOWNLOAD_FIlE = '/videos/DCIM'
+        DOWNLOAD_FIlE = '/videos/DCIM/100GOPRO'
 
     # OpenGoPro commands
     class Presets:
