@@ -8,10 +8,24 @@ BLE_CHAR_V2_STRING = "{}-aa8d-11e3-9046-0002a5d5c51b"
 class CommandsType(Enum):
     CONNECT = 0
     DISCONNECT = 1
-    VIDEO = 2
-    PHOTO = 3
     # preset the goPro's properties, like resolution, night photo and etc...
-    PRESETS = 4
+    PRESETS = 2
+    TIMELAPSE = 3
+    RECORD = 4
+
+
+class VideoRes(Enum):
+    # 1080
+    LowRES = 0
+    # 2.7K
+    HighRES = 1
+    # 5K
+    SuperRES = 2
+
+
+class CaptureMode(Enum):
+    VIDEO = 0
+    PHOTO = 1
 
 
 class Commands:
@@ -22,6 +36,7 @@ class Commands:
     class WIFIShutter:
         Start = f'/gopro/camera/shutter/start'
         Stop = f'/gopro/camera/shutter/stop'
+
     class Mode:
         Video = bytearray(b'\x03\x02\x01\x00')
         Photo = bytearray(b'\x03\x02\x01\x01')
@@ -54,6 +69,7 @@ class Commands:
         ON = bytearray(b'\x03\x17\x01\x01')
         OFF = bytearray(b'\x03\x17\x01\x00')
         GET_MEDIA_LIST = '/gopro/media/list'
+        DOWNLOAD_FIlE = '/videos/DCIM'
 
     # OpenGoPro commands
     class Presets:
@@ -109,7 +125,10 @@ class Characteristics:
 
 
 class CapturePayLoad:
-    def __init__(self, command_type: CommandsType, time_span: Optional[float]):
+    def __init__(self, command_type: CommandsType, time_span: Optional[float], resolution: VideoRes, mode: CaptureMode):
         self.command_type = command_type
-        # if time_span is null,then the default mode is photo
+        # if the mode is video,the time_span represents recording time,
+        # but if the mode is photo,the time_span represents the pic's amount you took
         self.time_span = time_span
+        self.capture_mode = mode
+        self.resolution = resolution

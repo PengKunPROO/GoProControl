@@ -1,5 +1,7 @@
+import argparse
 import asyncio
 import json
+import sys
 import time
 from binascii import hexlify
 from bleak import BleakClient, BleakScanner
@@ -10,6 +12,7 @@ import Commonds
 import requests
 import pywifi
 from pywifi import const
+from UtilMath import get_max_group_media
 
 FORMAT = "%(message)s"
 logging.basicConfig(level='INFO', format=FORMAT, datefmt='[%X]', handlers=[RichHandler()])
@@ -21,35 +24,57 @@ current_client: BleakClient
 
 wifi_profile = []
 
+# It will be assigned to False if any command sent failed.
+command_set_mark: bool = False
+
 
 def connect_wifi_by_ssid(ssid, psw):
-    wifi = pywifi.PyWiFi()
-    ifaces = wifi.interfaces()[0]
-    # ifaces.disconnect()
-    # time.sleep(3)
+    scan_count = 10
+    while scan_count:
+        logger.info(f'scan for target wifi {ssid}   :{scan_count}')
+        wifi = pywifi.PyWiFi()
+        ifaces = wifi.interfaces()[0]
+        ifaces.disconnect()
+        ifaces.scan()
+        time.sleep(3)
+        wifi_info = ifaces.scan_results()
+        find = False
+        for wifi_ssid in wifi_info:
+            if wifi_ssid.ssid == ssid:
+                find = True
+        if find:
+            logger.info(f'Find the wifi named {ssid}')
+            scan_count = 0
+        else:
+            scan_count -= 1
 
+    ifaces.disconnect()
+    time.sleep(3)
+    # time.sleep(3)
     profile = pywifi.Profile()
     profile.ssid = ssid
     profile.auth = const.AUTH_ALG_OPEN
+    profile.akm.append(const.AKM_TYPE_WPAPSK)
+    profile.cipher = const.CIPHER_TYPE_CCMP
     profile.key = psw
-
+    ifaces.remove_all_network_profiles()
     tmp_profile = ifaces.add_network_profile(profile)
-    ifaces.connect(tmp_profile)
+    connect_count = 10
+    while connect_count:
+        if ifaces.status() == const.IFACE_DISCONNECTED:
+            logger.info(f'connect for target wifi {ssid}   :{connect_count}')
+            ifaces.connect(tmp_profile)
+            time.sleep(10)
+            connect_count -= 1
+        else:
+            connect_count = 0
+            logger.info(f'connect succsfully to wifi {ssid}!')
+
     # 需要线程挂一下，3s够了，不然换wifi导致出错
-    time.sleep(3)
     if ifaces.status() == const.IFACE_CONNECTED:
         logger.info(f'Connected to {ssid} successfully!')
     else:
         logger.info(f'Connected to {ssid} failed!')
-
-
-def notification_handler(handle: int, data: bytes, client: BleakClient) -> None:
-    logger.info(f'Received response at {handle=}: {hexlify(data, ":")}!r')
-    if client.services.characteristics[handle].uuid == Commonds.Characteristics.CommandNotifications and data[
-        2] == 0x00:
-        logger.info('Command sent successfully!')
-    else:
-        logger.error('Unexpected response!')
 
 
 def callback_while_connect(sender, data):
@@ -64,10 +89,18 @@ async def scan():
 
 
 async def is_have_notify(client: BleakClient):
+    def notification_handler(handle: int, data: bytes) -> None:
+        logger.info(f'Received response at {handle=}: {hexlify(data, ":")}!r')
+        if client.services.characteristics[handle].uuid == Commonds.Characteristics.CommandNotifications and data[
+            2] == 0x00:
+            logger.info('Command sent successfully!')
+        else:
+            logger.error('Unexpected response!')
+
     for service in client.services:
         for char in service.characteristics:
             if 'notify' in char.properties:
-                await client.start_notify(char, callback=callback_while_connect)
+                await client.start_notify(char, callback=notification_handler)
 
 
 async def is_have_stop_notify(client: BleakClient):
@@ -115,37 +148,82 @@ async def disconnect(client, camera):
 
 
 # wifi_list就是那个global wifi列表，里面存的都是字典
-def download_file(wifi_list):
-    for wifi in wifi_list:
-        connect_wifi_by_ssid(wifi.get('ssid'), wifi.get('psw'))
-        # 连上谁的wifi下载的就是哪个相机的文件
-        media_list = get_media_list()
-        max_timestamp = 0
-        max_media = ''
-        for media in [x for x in media_list['media'][0]['fs']]:
-            print(media['mod'])
-            temp = int(media['mod'])
-            if temp > max_timestamp:
-                max_timestamp = media['mod']
-                max_media = media['n']
+def download_file(wifi_list, paras):
+    if paras.mode == 'video':
+        for wifi in wifi_list:
+            connect_wifi_by_ssid(wifi.get('ssid'), wifi.get('psw'))
+            # 连上谁的wifi下载的就是哪个相机的文件
+            media_list = get_media_list()
+            max_timestamp: int = int(0)
+            max_media = ''
+            for media in [x for x in media_list['media'][0]['fs']]:
+                if media['n'].lower().endswith('.mp4'):
+                    temp = int(media['mod'])
+                    if temp > max_timestamp:
+                        max_timestamp = temp
+                        max_media = media['n']
 
-        print(max_media)
+    elif paras.mode == 'photo':
+        for wifi in wifi_list:
+            connect_wifi_by_ssid(wifi.get('ssid'), wifi.get('psw'))
+            media_list = get_media_list()
+            # 找时间戳前几大的jpg格式的文件，然后下载
+            # media_find_list的长度=time_span=countdown
+            media_find_list = []
+            for media in [x for x in media_list['media'][0]['fs']]:
+                if media['n'].lower().endswith('.jpg'):
+                    media_find_list.append(media)
+            download_url = Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WiFi.DOWNLOAD_FIlE
+            countdown = int(paras.time)
+            media_res_list = get_max_group_media(media_find_list, countdown)
+            for index, media in enumerate(media_res_list):
+                if countdown <= 0:
+                    break
+                download_url += '/'+media['d'] + '/' + media['n']
+                with requests.get(download_url, stream=True) as request:
+                    request.raise_for_status()
+                    # 命名方式： 文件总目录+模式+文件名
+                    file = paras.file[index] + '/' + paras.mode + '/' + media['n'].spilt('.')[0] + '.jpg'
+                    with open(file, 'wb') as f:
+                        logger.info(f'Receiving binary stream to {file}...')
+                        for chunk in request.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                countdown -= 1
+
+
+async def set_camera(client: BleakClient, camera, paload_in: Commonds.CapturePayLoad):
+    if paload_in.capture_mode == Commonds.CaptureMode.PHOTO:
+        logger.info(f'Camera {camera.get("target")} is setting to photo mode')
+        await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic,
+                                     Commonds.Commands.PresetGroups.Photo, response=True)
+    elif paload_in.capture_mode == Commonds.CaptureMode.VIDEO:
+        logger.info(f'Camera {camera.get("target")} is setting to video mode')
+        await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic,
+                                     Commonds.Commands.PresetGroups.Video, response=True)
 
 
 async def record_video(client: BleakClient, camera, payload: Commonds.CapturePayLoad):
-    logger.info(f'start recording!')
-    # response = requests.get(Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WIFIShutter.Start)
-    # response.raise_for_status()
-    # logger.info('Command sent successfully!')
-    logger.info(f'Camera {camera.get("target")} is Recording')
-    await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Start,
-                                 response=True)
-    await asyncio.sleep(payload.time_span)
-    await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Stop,
-                                 response=True)
-    # response = requests.get(Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WIFIShutter.Stop)
-    # response.raise_for_status()
-    logger.info('Stop Command sent successfully!')
+    if payload.capture_mode == Commonds.CaptureMode.PHOTO:
+        for i in range(int(payload.time_span)):
+            logger.info(f'Start photoing!')
+            logger.info(f'Camera {camera.get("target")} is taking a photo')
+            await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic,
+                                         Commonds.Commands.Shutter.Start,
+                                         response=True)
+            await asyncio.sleep(int(payload.time_span))
+            await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Stop,
+                                         response=True)
+    elif payload.capture_mode == Commonds.CaptureMode.VIDEO:
+        logger.info(f'start recording!')
+        logger.info(f'Camera {camera.get("target")} is Recording')
+        await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Start,
+                                     response=True)
+        await asyncio.sleep(int(payload.time_span))
+        await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Stop,
+                                     response=True)
+        # response = requests.get(Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WIFIShutter.Stop)
+        # response.raise_for_status()
+        logger.info('Stop Command sent successfully!')
 
 
 # 这个就同步进行吧，在拍完之后同步连接两个GoPro的wifi然后进行下载
@@ -161,7 +239,7 @@ def get_media_list() -> Dict[str, Any]:
     return response.json()
 
 
-def control_by_command(loop, camera_list, command_type: Optional[Commonds.CommandsType] = None):
+def control_by_command(loop, camera_list, command_type: Optional[Commonds.CommandsType] = None, paras=None):
     if camera_list is None:
         global logger
         logger.error('Not found GoPro')
@@ -177,18 +255,33 @@ def control_by_command(loop, camera_list, command_type: Optional[Commonds.Comman
         for camera in camera_list:
             tasks.append(loop.create_task(disconnect(camera.get('bleak_client'), camera),
                                           name=f'Disconnect {camera.get("target")}'))
-    elif command_type == Commonds.CommandsType.VIDEO:
-        capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.VIDEO, time_span=3)
+    elif command_type == Commonds.CommandsType.RECORD:
+        if paras.mode == 'video':
+            capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.RECORD, time_span=paras.time,
+                                                      resolution=Commonds.VideoRes.LowRES,
+                                                      mode=Commonds.CaptureMode.VIDEO)
+        elif paras.mode == 'photo':
+            capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.RECORD, time_span=paras.time,
+                                                      resolution=Commonds.VideoRes.LowRES,
+                                                      mode=Commonds.CaptureMode.PHOTO)
         for camera in camera_list:
             tasks.append(loop.create_task(record_video(camera.get('bleak_client'), camera, capture_payload),
                                           name=f'Connect {camera.get("target")}'))
-    elif command_type == Commonds.CommandsType.PHOTO:
-        pass
     elif command_type == Commonds.CommandsType.PRESETS:
-        pass
+        if paras.mode == 'photo':
+            capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.PRESETS, time_span=paras.time,
+                                                      resolution=Commonds.VideoRes.LowRES,
+                                                      mode=Commonds.CaptureMode.PHOTO)
+        elif paras.mode == 'video':
+            capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.PRESETS, time_span=paras.time,
+                                                      resolution=Commonds.VideoRes.LowRES,
+                                                      mode=Commonds.CaptureMode.VIDEO)
+        for camera in camera_list:
+            tasks.append(loop.create_task(set_camera(camera.get('bleak_client'), camera, capture_payload),
+                                          name=f'Connect {camera.get("target")}'))
 
 
-async def main(loop):
+async def mainloop(loop, paras):
     camera_list = []
     global tasks
     found_devices = await loop.create_task(scan())
@@ -224,18 +317,40 @@ async def main(loop):
     #     elif key_value == 'q':
     #         break
     tasks.clear()
-    control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.CONNECT)
+    control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.CONNECT, paras=paras)
     await asyncio.wait(tasks)
-    # control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.VIDEO)
+    tasks.clear()
+    control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.PRESETS, paras=paras)
+    await asyncio.wait(tasks)
+    tasks.clear()
+    control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.RECORD, paras=paras)
+    await asyncio.wait(tasks)
     dones, pendings = await asyncio.wait(tasks)
     print(dones, pendings)
     for task in dones:
         print("Task ret:", task.result())
-    download_file(wifi_profile)
+
+    download_file(wifi_list=wifi_profile, paras=paras)
 
 
-tasks = []
-loop_outer = asyncio.get_event_loop()
-loop_outer.run_until_complete(main(loop_outer))
-loop_outer.close()
 # download_file(wifi_profile)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='GoPro Controller')
+    parser.add_argument('-m', '--mode', help='模式选择，video和photo', default='photo')
+    parser.add_argument('-t', '--time', help='记录时间，如果是photo就代表拍的张数', default='1')
+    # 此命令行参数可以接收多个参数
+    parser.add_argument('-f', '--file', nargs='*', help='左相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/left',
+                                                                            '/Users/pengkun/Desktop/GoProVideo/right'])
+    args = parser.parse_args()
+    try:
+        tasks = []
+        loop_outer = asyncio.get_event_loop()
+        task = loop_outer.create_task(mainloop(loop=loop_outer, paras=args))
+        loop_outer.run_until_complete(asyncio.wait([task,]))
+        loop_outer.close()
+    except Exception as e:
+        logger.error(repr(e))
+        sys.exit(-1)
+    else:
+        sys.exit(0)
