@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from binascii import hexlify
@@ -59,11 +60,11 @@ def connect_wifi_by_ssid(ssid, psw):
     profile.key = psw
     ifaces.remove_all_network_profiles()
     tmp_profile = ifaces.add_network_profile(profile)
-    connect_count = 2
+    connect_count = 1
     while connect_count:
         logger.info(f'connect for target wifi {ssid}   :{connect_count}')
         ifaces.connect(tmp_profile)
-        time.sleep(4)
+        time.sleep(5)
         connect_count -= 1
 
     # 需要线程挂一下，3s够了，不然换wifi导致出错
@@ -160,7 +161,7 @@ def download_file(wifi_list, paras):
                         max_media = media['n']
 
     elif paras.mode == 'photo':
-        for indexx,wifi in enumerate(wifi_list):
+        for indexx, wifi in enumerate(wifi_list):
             connect_wifi_by_ssid(wifi.get('ssid'), wifi.get('psw'))
             media_list = get_media_list()
             # 找时间戳前几大的jpg格式的文件，然后下载
@@ -170,7 +171,7 @@ def download_file(wifi_list, paras):
                 if media['n'].lower().endswith('.jpg'):
                     media_find_list.append(media)
             download_url = Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WiFi.DOWNLOAD_FIlE
-            print('dadad'+download_url)
+            print('form the url:' + download_url)
             countdown = int(paras.time)
             media_res_list = get_max_group_media(media_find_list, countdown)
             print(media_res_list)
@@ -178,12 +179,14 @@ def download_file(wifi_list, paras):
                 if countdown <= 0:
                     break
                 url = download_url + '/' + str(media_res_list[index]['n'])
-                print(download_url)
                 logger.info(f'Downloading {media_res_list[index]["n"]} from {download_url}')
                 with requests.get(url, stream=True) as request:
                     request.raise_for_status()
-                    # 命名方式： 文件总目录+模式+文件名
-                    file = paras.file[indexx] + '/' + paras.mode + '/' + media_res_list[index]['n'].split('.')[0] + '.jpg'
+                    # 命名方式： 文件总目录+wifi名+文件名
+                    dir_in = paras.file[0] + '/' + wifi.get('ssid') + '/' + paras.mode
+                    if not os.path.exists(dir_in):
+                        os.makedirs(dir_in)
+                    file = dir_in+'/'+media_res_list[index]['n'].split('.')[0]+'.jpg'
                     logger.info(f'file name is {file}')
                     with open(file, "wb") as f:
                         logger.info(f'Receiving binary stream to {file}...')
@@ -232,6 +235,7 @@ def get_media_list() -> Dict[str, Any]:
     url = Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WiFi.GET_MEDIA_LIST
     logger.info(f'getting the media list: sending {url}')
     response = requests.get(url)
+    time.sleep(5)
     response.raise_for_status()
     logger.info('Get media Command sent sucdessfully!')
 
@@ -307,16 +311,6 @@ async def mainloop(loop, paras):
                                )
     logger.info(camera_list)
 
-    # while True:
-    #     key_value = input()
-    #     if key_value == 'g':
-    #         control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.VIDEO)
-    #     elif key_value == 'c':
-    #         control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.CONNECT)
-    #     elif key_value == 'd':
-    #         control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.DISCONNECT)
-    #     elif key_value == 'q':
-    #         break
     tasks.clear()
     control_by_command(loop, camera_list=camera_list, command_type=Commonds.CommandsType.CONNECT, paras=paras)
     await asyncio.wait(tasks)
@@ -331,18 +325,13 @@ async def mainloop(loop, paras):
     for task in dones:
         print("Task ret:", task.result())
 
-    #download_file(wifi_list=wifi_profile, paras=paras)
-
-
-# download_file(wifi_profile)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GoPro Controller')
     parser.add_argument('-m', '--mode', help='模式选择，video和photo', default='photo')
     parser.add_argument('-t', '--time', help='记录时间，如果是photo就代表拍的张数', default='2')
     # 此命令行参数可以接收多个参数
-    parser.add_argument('-f', '--file', nargs='+', help='左相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/left',
-                                                                            '/Users/pengkun/Desktop/GoProVideo/right'])
+    parser.add_argument('-f', '--file', nargs='+', help='相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/'])
     args = parser.parse_args()
     try:
         tasks = []
