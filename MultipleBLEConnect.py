@@ -186,7 +186,7 @@ def download_file(wifi_list, paras):
                     dir_in = paras.file[0] + '/' + wifi.get('ssid') + '/' + paras.mode
                     if not os.path.exists(dir_in):
                         os.makedirs(dir_in)
-                    file = dir_in+'/'+media_res_list[index]['n'].split('.')[0]+'.jpg'
+                    file = dir_in + '/' + media_res_list[index]['n'].split('.')[0] + '.jpg'
                     logger.info(f'file name is {file}')
                     with open(file, "wb") as f:
                         logger.info(f'Receiving binary stream to {file}...')
@@ -214,7 +214,7 @@ async def record_video(client: BleakClient, camera, payload: Commonds.CapturePay
             await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic,
                                          Commonds.Commands.Shutter.Start,
                                          response=True)
-            await asyncio.sleep(int(payload.time_span))
+            time.sleep(payload.photo_interval)
             await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Stop,
                                          response=True)
     elif payload.capture_mode == Commonds.CaptureMode.VIDEO:
@@ -222,12 +222,13 @@ async def record_video(client: BleakClient, camera, payload: Commonds.CapturePay
         logger.info(f'Camera {camera.get("target")} is Recording')
         await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Start,
                                      response=True)
-        await asyncio.sleep(int(payload.time_span))
+        time.sleep(int(payload.time_span))
         await client.write_gatt_char(Commonds.Characteristics.ControlCharacteristic, Commonds.Commands.Shutter.Stop,
                                      response=True)
+        logger.info('Stop Command sent successfully!')
         # response = requests.get(Commonds.Characteristics.GoProBaseURL + Commonds.Commands.WIFIShutter.Stop)
         # response.raise_for_status()
-        logger.info('Stop Command sent successfully!')
+
 
 
 # 这个就同步进行吧，在拍完之后同步连接两个GoPro的wifi然后进行下载
@@ -264,11 +265,11 @@ def control_by_command(loop, camera_list, command_type: Optional[Commonds.Comman
         if paras.mode == 'video':
             capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.RECORD, time_span=paras.time,
                                                       resolution=Commonds.VideoRes.LowRES,
-                                                      mode=Commonds.CaptureMode.VIDEO)
+                                                      mode=Commonds.CaptureMode.VIDEO,interval=paras.interval)
         elif paras.mode == 'photo':
             capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.RECORD, time_span=paras.time,
                                                       resolution=Commonds.VideoRes.LowRES,
-                                                      mode=Commonds.CaptureMode.PHOTO)
+                                                      mode=Commonds.CaptureMode.PHOTO, interval=paras.interval)
         for camera in camera_list:
             tasks.append(loop.create_task(record_video(camera.get('bleak_client'), camera, capture_payload),
                                           name=f'Connect {camera.get("target")}'))
@@ -276,11 +277,11 @@ def control_by_command(loop, camera_list, command_type: Optional[Commonds.Comman
         if paras.mode == 'photo':
             capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.PRESETS, time_span=paras.time,
                                                       resolution=Commonds.VideoRes.LowRES,
-                                                      mode=Commonds.CaptureMode.PHOTO)
+                                                      mode=Commonds.CaptureMode.PHOTO,interval=paras.interval)
         elif paras.mode == 'video':
             capture_payload = Commonds.CapturePayLoad(Commonds.CommandsType.PRESETS, time_span=paras.time,
                                                       resolution=Commonds.VideoRes.LowRES,
-                                                      mode=Commonds.CaptureMode.VIDEO)
+                                                      mode=Commonds.CaptureMode.VIDEO,interval=paras.interval)
         for camera in camera_list:
             tasks.append(loop.create_task(set_camera(camera.get('bleak_client'), camera, capture_payload),
                                           name=f'Connect {camera.get("target")}'))
@@ -332,6 +333,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--time', help='记录时间，如果是photo就代表拍的张数', default='2')
     # 此命令行参数可以接收多个参数
     parser.add_argument('-f', '--file', nargs='+', help='相机存储位置', default=['/Users/pengkun/Desktop/GoProVideo/'])
+    parser.add_argument('-i', '--interval', type=int, help='拍照模式下的拍照间隔', default=2)
     args = parser.parse_args()
     try:
         tasks = []

@@ -125,10 +125,11 @@ class Characteristics:
 
 
 class CapturePayLoad:
-    def __init__(self, command_type: CommandsType, time_span: Optional[float], resolution: VideoRes, mode: CaptureMode):
+    def __init__(self, command_type: CommandsType, time_span: Optional[float], resolution: VideoRes, mode: CaptureMode,interval:int):
         self.command_type = command_type
         # if the mode is video,the time_span represents recording time,
         # but if the mode is photo,the time_span represents the pic's amount you took
         self.time_span = time_span
         self.capture_mode = mode
         self.resolution = resolution
+        self.photo_interval = interval
